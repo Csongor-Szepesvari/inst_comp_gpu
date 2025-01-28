@@ -1,0 +1,392 @@
+import cupy as cp
+from scipy.stats import norm
+
+def calculate_replicates_for_top_k(
+    params,          # List of (dist_type, mu, sigma, sample_size) tuples
+    k,               # Number of top-k values to consider
+    confidence=0.95,      # Desired confidence level (e.g., 0.95 for 95% confidence)
+    error_rate=0.01,      # Allowed relative error (e.g., 0.01 for 1% error)
+    max_iters=50,    # Max iterations for convergence
+    tol=1e-3         # Tolerance for replicate change
+):
+    """
+    Calculate the number of replicates required for estimating the mean of the top-k
+    values from a fixed-size combined sample of distributions.
+
+    Parameters:
+        params (list of tuples): Each tuple (dist_type, mu, sigma, n) specifies:
+                                 - dist_type: 'normal' or 'lognormal'
+                                 - mu: mean of the distribution
+                                 - sigma: standard deviation of the distribution
+                                 - n: number of samples to draw from the distribution
+        k (int): Number of top-k values to estimate.
+        confidence (float): Desired confidence level (e.g., 0.95).
+        error_rate (float): Allowed relative error in the top-k mean estimate.
+        max_iters (int): Maximum number of iterations to converge.
+        tol (float): Tolerance for replicate count change between iterations.
+
+    Returns:
+        int: Estimated required number of replicates.
+    """
+    # Calculate z-score for the confidence level
+    z = norm.ppf(1 - (1 - confidence) / 2)
+
+    # Initial guess for number of replicates
+    num_replicates = 100
+
+    # Total combined sample size from all distributions
+    combined_sample_size = sum(n for _, _, _, n in params)
+    k = int(min(combined_sample_size, k))
+
+    for _ in range(max_iters):
+        # Generate the combined sample based on specified sample sizes and distribution types
+        combined_data = cp.concatenate([
+            cp.random.normal(mu, sigma, int(n)) if dist_type == 'normal' else
+            cp.random.lognormal(mu, sigma, int(n))
+            for dist_type, mu, sigma, n in params
+        ])
+
+        # Extract top-k values
+        top_k_values = cp.sort(combined_data)[-k:]
+        top_k_mean = cp.mean(top_k_values)
+        top_k_std = cp.std(top_k_values, ddof=1) if len(top_k_values) > 1 else cp.std(top_k_values)
+
+        # Estimate the required number of replicates
+        required_replicates = max(1, int(((z * top_k_std) / (error_rate * top_k_mean))**2))
+
+        # Convergence check
+        if abs(required_replicates - num_replicates) / num_replicates < tol:
+            return required_replicates
+
+        # Update replicate count for the next iteration
+        num_replicates = required_replicates
+
+    # If convergence is not achieved, return the last estimate
+    return num_replicates
+
+def transform_mu_sigma_to_log(mu, sigma):
+    sigma_log = cp.log(sigma) / 2
+    mu_log = cp.log(mu) / 2
+    return mu_log, sigma_log
+
+def generate_samples_top_k(categories, dist_type, top_k=None):
+    """
+    Generate samples for the top-k computation using GPU acceleration.
+
+    Parameters:
+        categories (list of tuples): List of (n, mu, sigma) for each category.
+        dist_type (str): Either 'normal' or 'lognormal'.
+        top_k (int): Optional, number of top values to return.
+
+    Returns:
+        cupy.ndarray: Array of sampled outcomes (sorted if top_k is specified).
+    """
+    outcomes = cp.concatenate([
+        cp.random.lognormal(mu, sigma, int(n)) if dist_type == 'log' else
+        cp.random.normal(mu, sigma, int(n))
+        for n, mu, sigma in categories
+    ])
+
+    if top_k is not None:
+        outcomes = cp.sort(outcomes)[-top_k:]
+    return outcomes
+
+def eval_particular_distribution(categories, dist_type, memo, top_k=None, verbose=False):
+    """
+    Evaluate the expected value for a particular distribution using GPU.
+
+    Parameters:
+        categories (list of tuples): List of (n, mu, sigma) for each category.
+        dist_type (str): Either 'normal' or 'lognormal'.
+        memo (dict): Cache to avoid redundant calculations.
+        top_k (int): Optional, number of top values to consider.
+        verbose (bool): If True, prints progress.
+
+    Returns:
+        float: Estimated expected value.
+    """
+    # Check the memo cache
+    key = (tuple(categories), dist_type, top_k)
+    if key in memo:
+        return memo[key]
+
+    # Estimate the number of replicates
+    num_replicates = 
+    
+    num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, top_k, dist_type), 50000)) if dist_type == 'log' else max(1000, min(num_replicates, 10000))
+    
+
+    outcomes = cp.mean(cp.stack([
+        cp.mean(generate_samples_top_k(categories, dist_type, top_k=top_k))
+        for _ in range(num_replicates)
+    ]))
+
+    # Store the result in memo and return the mean outcome
+    memo[key] = outcomes.get()
+    return memo[key]
+
+class Category:
+    def __init__(self, name, mu, sigma, size, log_or_normal):
+        self.name = name
+        self.size = size
+        self.log_normal = log_or_normal
+        self.mu, self.sigma = (
+            transform_mu_sigma_to_log(mu, sigma) if log_or_normal == 'log' else (mu, sigma)
+        )
+        self.mean = cp.exp((self.mu + self.sigma ** 2) / 2) if log_or_normal == 'log' else self.mu
+        self.std = (cp.exp(2*self.mu)*(cp.exp(self.sigma**2)-1))**(1/2) if log_or_normal == 'log' else self.sigma
+
+    def get_samples(self, n):
+        if n > self.size:
+            raise ValueError("Cannot sample more than available elements.")
+        if self.log_normal == 'log':
+            return cp.random.lognormal(mean=self.mu, sigma=self.sigma, size=n)
+        return cp.random.normal(loc=self.mean, scale=self.std, size=n)
+
+
+class Player:
+    def __init__(self, win_value: float, blind: bool, level: int, name: str):
+        """
+        Initializes a Player object.
+
+        Parameters:
+            win_value (float): Value used to calculate probability of victory in collisions.
+            blind (bool): Whether the player is blind to detailed strategy optimizations.
+            level (int): Level of the player (0 for basic, higher for iterated responses).
+            name (str): Unique identifier for the player.
+        """
+        self.strategy = {"Q1": 0, "Q2": 0, "Q3": 0, "Q4": 0}
+        self.blind_strategy = {"high": 0, "low": 0}
+        self.win_value = win_value
+        self.blind = blind
+        self.level = level
+        self.name = name
+
+    ...
+    def convert_category_strategy_to_evaluator(self, game):
+        """
+        Converts the player's category-level strategy into a tuple representation for evaluation.
+        
+        Parameters:
+            game (Game): The game instance containing category details.
+            
+        Returns:
+            tuple: A tuple of (distribution type, mean, std, size) for each category.
+        """
+        return tuple(
+            (
+                "lognormal" if category.log_normal else "normal",
+                category.mu,
+                category.sigma,
+                int(category.size * self.strategy[category_name])
+            )
+            for category_name, category in game.categories.items()
+        )
+
+    def update_strategy(self, game):
+        """
+        Update player strategy based on blind strategy proportions.
+
+        Parameters:
+            blind_strategy (dict): Blind strategy with high and low group allocations.
+            game (Game): The current game object.
+        """
+
+        self.strategy = {category_name: cp.round(self.blind_strategy[group] * game.categories[category_name].size) / game.categories[category_name].size  for category_name, group in zip(["Q1", "Q2", "Q3", "Q4"], ["high", "high", "low", "low"])}
+
+    def calculate_win_chance(self, players):
+        """
+        Calculate this player's win chance based on relative win values.
+
+        Parameters:
+            players (list[Player]): List of all players in the game.
+
+        Returns:
+            float: Win probability for this player.
+        """
+        total_win_value = sum(player.win_value for player in players)
+        return self.win_value / total_win_value
+
+    def calc_expected_attendees(self, strategy, game):
+        """
+        Calculate expected attendees for the player under a given strategy.
+
+        Parameters:
+            strategy (dict): Strategy dictionary specifying category allocations.
+            game (Game): The game object with categories and players.
+
+        Returns:
+            dict: Expected attendees per category.
+        """
+        other_players = [player for player in game.players if player != self]
+        achieved_result_pct = {}
+
+        for category_name, category in game.categories.items():
+            lost_pct = sum(
+                other_player.strategy[category_name] * other_player.win_value / self.win_value
+                for other_player in other_players
+            )
+            achieved_result_pct[category_name] = strategy[category_name] * (1 - lost_pct)
+
+        return achieved_result_pct
+
+    def greedy_top_k_br(self, game, feasible_strategy_numbers,  blind=False):
+        """
+        Perform a greedy best response strategy for top-k allocation.
+
+        Parameters:
+            game (Game): The game object.
+            feasible_strategy_numbers (dict): Maximum feasible strategy numbers for each category.
+            k (int): Number of top-k values to consider.
+            blind (bool, optional): Whether the player is blind to strategy optimizations.
+        """
+        to_admit = game.to_admit
+        new_strategy = {category.get_name(): 0 for category in game.categories.values()}
+
+        if not blind:
+            for _ in range(to_admit):
+                max_val = float('-inf')
+                max_cat = None
+                for category in game.categories.values():
+                    if new_strategy[category.get_name()] < feasible_strategy_numbers[category.get_name()]:
+                        temp_strategy = new_strategy.copy()
+                        temp_strategy[category.get_name()] += 1
+                        category_tuple = game.convert_category_strategy_to_evaluator(temp_strategy)
+                        val = game.eval_particular_distribution(category_tuple, game.top_k)
+                        if val > max_val:
+                            max_val = val
+                            max_cat = category.get_name()
+                new_strategy[max_cat] += 1
+
+            self.strategy = {key: value / feasible_strategy_numbers[key] for key, value in new_strategy.items()}
+        else:
+            high_total = feasible_strategy_numbers["Q1"] + feasible_strategy_numbers["Q2"]
+            low_total = feasible_strategy_numbers["Q3"] + feasible_strategy_numbers["Q4"]
+            high_admit = min(to_admit, high_total)
+            low_admit = to_admit - high_admit
+
+            self.blind_strategy["high"] = high_admit / high_total
+            self.blind_strategy["low"] = low_admit / low_total
+            self.update_strategy(self.blind_strategy, game)
+
+    def best_response(self, game):
+        """
+        Compute the best response for the player in the current game state.
+
+        Parameters:
+            game (Game): The game object.
+        """
+        max_strategy = {key: 1 for key in self.strategy.keys()}
+        feasible_strategies = self.calc_expected_attendees(max_strategy, game)
+        feasible_numbers = {
+            key: feasible_strategies[key] * game.categories[key].size
+            for key in feasible_strategies
+        }
+
+        if game.game_mode_type == "top_k":
+            self.greedy_top_k_br(game, feasible_numbers, game.top_k, self.blind)
+        elif game.game_mode_type == "expected":
+            to_admit = game.to_admit
+            new_strategy = {key: 0 for key in self.strategy.keys()}
+
+            for category_name in sorted(self.strategy.keys(), key=lambda x: -game.categories[x].mean):
+                category_size = game.categories[category_name].size
+                if to_admit > category_size:
+                    new_strategy[category_name] = 1
+                    to_admit -= category_size
+                else:
+                    new_strategy[category_name] = to_admit / category_size
+                    to_admit = 0
+                    break
+
+            self.strategy = new_strategy
+
+class Game:
+    def __init__(self, num_players, to_admit, players, categories, game_mode_type, top_k=None, log_normal=False, verbose=False):
+        """
+        Initialize a Game object.
+
+        Parameters:
+            num_players (int): Number of players in the game.
+            to_admit (int): Number of students each player aims to admit.
+            players (list[Player]): List of player objects.
+            categories (dict): Dictionary of category objects.
+            game_mode_type (str): Game type (e.g., "top_k" or "expected").
+            top_k (int, optional): Number of top values to consider (for "top_k" mode).
+            log_normal (bool, optional): Whether distributions are log-normal.
+            verbose (bool, optional): Verbosity of debug output.
+        """
+        self.num_players = num_players
+        self.to_admit = to_admit
+        self.players = players
+        self.categories = categories
+        self.game_mode_type = game_mode_type
+        self.top_k = top_k
+        self.log_normal = log_normal
+        self.verbose = verbose
+
+    def find_strategies_iterated_br(self):
+        """
+        Find Nash equilibrium by iterated best responses.
+
+        Each player updates their strategy until a stable profile is found.
+        """
+        previous_strategies = None
+        while previous_strategies != [player.strategy for player in self.players]:
+            previous_strategies = [player.strategy.copy() for player in self.players]
+            for player in self.players:
+                player.best_response(self)
+
+def simulate_game(game):
+    """
+    Simulate the game based on player strategies and resolve outcomes.
+
+    Returns:
+        dict: Utility results for each player.
+    """
+    attendees = {player.name: [] for player in game.players}
+    for category in game.categories.values():
+        candidates = cp.arange(category.size)
+        allocations = {
+            player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
+            for player in game.players
+        }
+
+        for candidate in candidates:
+            competitors = [player for player in game.players if candidate in allocations[player.name]]
+            if competitors:
+                winner = cp.random.choice(competitors, p=[p.win_value for p in competitors])
+                attendees[winner.name].append(category.get_samples(1))
+
+    return calculate_utilities(attendees)
+
+def calculate_utilities(game, attendees):
+    """
+    Calculate utilities for each player based on attendee outcomes.
+
+    Parameters:
+        attendees (dict): Mapping of player names to their attendees' values.
+
+    Returns:
+        dict: Utilities and additional stats for each player.
+    """
+    results = {}
+    for player in game.players:
+        admitted_values = cp.array(attendees[player.name])
+        if game.game_mode_type == "top_k":
+            top_k_values = cp.sort(admitted_values)[-game.top_k:]
+            utility = cp.sum(top_k_values) - (len(admitted_values) - game.to_admit)**2
+        else:
+            utility = cp.sum(admitted_values) - (len(admitted_values) - game.to_admit)**2
+
+        results[player.name] = {
+            "utility": utility.get(),
+            "admitted": len(admitted_values),
+            "top_k": top_k_values.get().tolist() if game.game_mode_type == "top_k" else []
+        }
+
+    total_utility = sum(res["utility"] for res in results.values())
+    for res in results.values():
+        res["pct_total_util"] = res["utility"] / total_utility
+
+    return results
