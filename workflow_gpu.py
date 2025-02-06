@@ -4,7 +4,7 @@ import pandas as pd
 from git import Repo
 import cupy as cp
 import datetime
-from gpt_feed_main import process_row
+from main_gpu import process_row
 
 # Define folders
 BASE_DIR = os.getcwd()
