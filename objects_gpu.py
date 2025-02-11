@@ -110,9 +110,7 @@ def eval_particular_distribution(categories, dist_type, memo, top_k=None, verbos
     if key in memo:
         return memo[key]
 
-    # Estimate the number of replicates
-    num_replicates = 
-    
+    # Estimate the number of replicates    
     num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, top_k, dist_type), 50000)) if dist_type == 'log' else max(1000, min(num_replicates, 10000))
     
 
@@ -136,12 +134,17 @@ class Category:
         self.mean = cp.exp((self.mu + self.sigma ** 2) / 2) if log_or_normal == 'log' else self.mu
         self.std = (cp.exp(2*self.mu)*(cp.exp(self.sigma**2)-1))**(1/2) if log_or_normal == 'log' else self.sigma
 
-    def get_samples(self, n):
-        if n > self.size:
+    def get_samples(self, sizes):
+        #print(self.name, sizes)
+        if cp.any(sizes > self.size):
             raise ValueError("Cannot sample more than available elements.")
-        if self.log_normal == 'log':
-            return cp.random.lognormal(mean=self.mu, sigma=self.sigma, size=n)
-        return cp.random.normal(loc=self.mean, scale=self.std, size=n)
+        samples = []
+        for n in sizes:
+            if self.log_normal == 'log':
+                samples.append(cp.random.lognormal(mean=self.mu, sigma=self.sigma, size=int(n)))
+            else:
+                samples.append(cp.random.normal(loc=self.mean, scale=self.std, size=int(n)))
+        return samples
 
 
 class Player:
@@ -175,7 +178,7 @@ class Player:
         """
         return tuple(
             (
-                "lognormal" if category.log_normal else "normal",
+                "log" if category.log_normal else "normal",
                 category.mu,
                 category.sigma,
                 int(category.size * self.strategy[category_name])
@@ -276,13 +279,15 @@ class Player:
         Parameters:
             game (Game): The game object.
         """
+        #print(game.game_mode_type)
         max_strategy = {key: 1 for key in self.strategy.keys()}
         feasible_strategies = self.calc_expected_attendees(max_strategy, game)
+        #print(self.name, feasible_strategies)
         feasible_numbers = {
             key: feasible_strategies[key] * game.categories[key].size
             for key in feasible_strategies
         }
-
+        print(self.name, feasible_numbers)
         if game.game_mode_type == "top_k":
             self.greedy_top_k_br(game, feasible_numbers, game.top_k, self.blind)
         elif game.game_mode_type == "expected":
@@ -290,12 +295,13 @@ class Player:
             new_strategy = {key: 0 for key in self.strategy.keys()}
 
             for category_name in sorted(self.strategy.keys(), key=lambda x: -game.categories[x].mean):
-                category_size = game.categories[category_name].size
-                if to_admit > category_size:
+                print(category_name, to_admit)
+                feasible = feasible_numbers[category_name]
+                if to_admit > feasible:
                     new_strategy[category_name] = 1
-                    to_admit -= category_size
+                    to_admit -= feasible
                 else:
-                    new_strategy[category_name] = to_admit / category_size
+                    new_strategy[category_name] = to_admit / feasible
                     to_admit = 0
                     break
 
@@ -337,56 +343,146 @@ class Game:
             for player in self.players:
                 player.best_response(self)
 
-def simulate_game(game):
-    """
-    Simulate the game based on player strategies and resolve outcomes.
+    def simulate_game(self):
+        """
+        Simulate the game based on player strategies and resolve outcomes.
 
-    Returns:
-        dict: Utility results for each player.
-    """
-    attendees = {player.name: [] for player in game.players}
-    for category in game.categories.values():
-        candidates = cp.arange(category.size)
-        allocations = {
-            player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
-            for player in game.players
-        }
+        Returns:
+            cp.ndarray: Array of 'pct_total_util' for each player.
+        """
+        attendees = {player.name: [] for player in self.players}
+        
+        for category in self.categories.values():
+            candidates = cp.arange(category.size)
+            
+            # Vectorized allocation of candidates to players
+            allocations = {
+                player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
+                for player in self.players
+            }
+            
+            # Create a boolean mask for each player indicating which candidates they have
+            masks = {player.name: cp.isin(candidates, allocations[player.name]) for player in self.players}
+            
+            
+            # Calculate win probabilities for each player
+            win_probs = cp.array([player.win_value for player in self.players])
+            
+            # Normalize win probabilities for each candidate
+            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
+            
+            # Randomly select winners based on win probabilities for each possible candidate
+            winners = cp.random.choice(len(self.players), size=category.size, p=win_probs_normalized)
+            print(winners)
+            # If the boolean mask overlaps with winners for a player, add that sample to the player's attendees
+            for i, player in enumerate(self.players):
+                winner_mask = (winners == i)
+                attendees[player.name].extend(category.get_samples(cp.sum(winner_mask)))
 
-        for candidate in candidates:
-            competitors = [player for player in game.players if candidate in allocations[player.name]]
-            if competitors:
-                winner = cp.random.choice(competitors, p=[p.win_value for p in competitors])
-                attendees[winner.name].append(category.get_samples(1))
+        # Calculate utilities and extract 'pct_total_util' for each player
+        utilities = self.calculate_utilities(attendees)
+        pct_total_util_array = cp.array([utilities[player.name]['pct_total_util'] for player in self.players])
 
-    return calculate_utilities(attendees)
+        return pct_total_util_array
 
-def calculate_utilities(game, attendees):
-    """
-    Calculate utilities for each player based on attendee outcomes.
+    def calculate_utilities(self, attendees):
+        """
+        Calculate utilities for each player based on attendee outcomes.
 
-    Parameters:
-        attendees (dict): Mapping of player names to their attendees' values.
+        Parameters:
+            attendees (dict): Mapping of player names to their attendees' values.
 
-    Returns:
-        dict: Utilities and additional stats for each player.
-    """
-    results = {}
-    for player in game.players:
-        admitted_values = cp.array(attendees[player.name])
-        if game.game_mode_type == "top_k":
-            top_k_values = cp.sort(admitted_values)[-game.top_k:]
-            utility = cp.sum(top_k_values) - (len(admitted_values) - game.to_admit)**2
-        else:
-            utility = cp.sum(admitted_values) - (len(admitted_values) - game.to_admit)**2
+        Returns:
+            dict: Utilities and additional stats for each player.
+        """
+        results = {}
+        for player in self.players:
+            admitted_values = cp.array(attendees[player.name])
+            if self.game_mode_type == "top_k":
+                top_k_values = cp.sort(admitted_values)[-self.top_k:]
+                utility = cp.sum(top_k_values) - abs(len(admitted_values) - self.to_admit)
+            else:
+                utility = cp.sum(admitted_values) - abs(len(admitted_values) - self.to_admit)
 
-        results[player.name] = {
-            "utility": utility.get(),
-            "admitted": len(admitted_values),
-            "top_k": top_k_values.get().tolist() if game.game_mode_type == "top_k" else []
-        }
+            results[player.name] = {
+                "utility": utility.get(),
+                "admitted": len(admitted_values),
+                "top_k": top_k_values.get().tolist() if self.game_mode_type == "top_k" else []
+            }
 
-    total_utility = sum(res["utility"] for res in results.values())
-    for res in results.values():
-        res["pct_total_util"] = res["utility"] / total_utility
+        total_utility = sum(res["utility"] for res in results.values())
+        for res in results.values():
+            res["pct_total_util"] = res["utility"] / total_utility
 
-    return results
+        return results
+
+    def simulate_game_batch(self, batch_size):
+        """
+        Simulate multiple games based on player strategies and resolve outcomes.
+
+        Parameters:
+            batch_size (int): Number of games to simulate in parallel.
+
+        Returns:
+            cp.ndarray: Array of 'pct_total_util' for each player in each game.
+        """
+        # Initialize an array to store results for each game in the batch
+        batch_results = cp.zeros((batch_size, len(self.players)))
+
+        for category in self.categories.values():
+            # make candidates have shape (batch_size, category.size)
+            candidates = cp.array([cp.arange(category.size) for _ in range(batch_size)])
+            
+
+            # Vectorized allocation of candidates to players for each game in the batch
+            allocations = {
+                player.name: cp.array([cp.random.choice(candidates[0], size=int(cp.round(player.strategy[category.name] * category.size)), replace=False) for _ in range(batch_size)])
+                for player in self.players
+            }
+            
+            # print(allocations)
+
+            # Initialize a dictionary to store masks for each player
+            masks = {}
+
+            # Iterate over each player to calculate their mask
+            for player in self.players:
+                # Use broadcasting to create a mask for all games at once
+                player_allocations = allocations[player.name]
+                # Reshape candidates and player_allocations for broadcasting
+                candidates_expanded = candidates[:, :, None]  # Shape: (batch_size, category.size, 1)
+                player_allocations_expanded = player_allocations[:, None, :]  # Shape: (batch_size, 1, num_allocations)
+
+                # Use broadcasting to compare candidates with player allocations
+                player_mask = cp.any(candidates_expanded == player_allocations_expanded, axis=2)
+
+                # Store the mask for the current player
+                masks[player.name] = player_mask
+
+            #print(masks)
+
+            # Calculate win probabilities for each player
+            win_probs = cp.array([player.win_value for player in self.players])
+            
+            # Normalize win probabilities for each candidate
+            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
+            
+            # Randomly select winners based on win probabilities for each possible candidate
+            winners = cp.random.choice(len(self.players), size=(batch_size, category.size), p=win_probs_normalized)
+            #print(winners)
+
+
+            # Collect samples for winners
+            for i, player in enumerate(self.players):
+                winner_mask = (winners == i)
+                #print(i, winner_mask)
+                attendees = category.get_samples(cp.sum(winner_mask, axis=1))
+                batch_results[:, i] += cp.array([cp.sum(att) for att in attendees])
+
+
+        #print(batch_results)
+        # Calculate utilities and extract 'pct_total_util' for each player in each game
+        total_utilities = cp.sum(batch_results, axis=1, keepdims=True)
+        pct_total_util_array = batch_results / total_utilities
+
+        return pct_total_util_array
