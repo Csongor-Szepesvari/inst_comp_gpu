@@ -212,7 +212,7 @@ class Player:
 
     def calc_expected_attendees(self, strategy, game):
         """
-        Calculate expected attendees for the player under a given strategy.
+        Calculate expected attendees for the player under a given strategy. (This is only for the case where there's only two players)
 
         Parameters:
             strategy (dict): Strategy dictionary specifying category allocations.
@@ -221,17 +221,8 @@ class Player:
         Returns:
             dict: Expected attendees per category.
         """
-        other_players = [player for player in game.players if player != self]
-        achieved_result_pct = {}
-
-        for category_name, category in game.categories.items():
-            lost_pct = sum(
-                other_player.strategy[category_name] * other_player.win_value / self.win_value
-                for other_player in other_players
-            )
-            achieved_result_pct[category_name] = strategy[category_name] * (1 - lost_pct)
-
-        return achieved_result_pct
+        other_player = [player for player in game.players if player != self][0]
+        return {category_name: strategy[category_name] * (1 - other_player.strategy[category_name]*other_player.win_value/(other_player.win_value + self.win_value)) for category_name, category in game.categories.items()}
 
     def greedy_top_k_br(self, game, feasible_strategy_numbers,  blind=False):
         """
@@ -255,7 +246,7 @@ class Player:
                         temp_strategy = new_strategy.copy()
                         temp_strategy[category.get_name()] += 1
                         category_tuple = game.convert_category_strategy_to_evaluator(temp_strategy)
-                        val = game.eval_particular_distribution(category_tuple, game.top_k)
+                        val = eval_particular_distribution(category_tuple, game.top_k)
                         if val > max_val:
                             max_val = val
                             max_cat = category.get_name()
@@ -287,7 +278,7 @@ class Player:
             key: feasible_strategies[key] * game.categories[key].size
             for key in feasible_strategies
         }
-        print(self.name, feasible_numbers)
+        #print("Prints player name and the \"achievable\" numbers from maxing out each category",self.name, feasible_numbers)
         if game.game_mode_type == "top_k":
             self.greedy_top_k_br(game, feasible_numbers, game.top_k, self.blind)
         elif game.game_mode_type == "expected":
@@ -295,7 +286,7 @@ class Player:
             new_strategy = {key: 0 for key in self.strategy.keys()}
 
             for category_name in sorted(self.strategy.keys(), key=lambda x: -game.categories[x].mean):
-                print(category_name, to_admit)
+                #print(category_name, to_admit)
                 feasible = feasible_numbers[category_name]
                 if to_admit > feasible:
                     new_strategy[category_name] = 1
@@ -360,7 +351,7 @@ class Game:
                 player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
                 for player in self.players
             }
-            
+            print(allocations)
             # Create a boolean mask for each player indicating which candidates they have
             masks = {player.name: cp.isin(candidates, allocations[player.name]) for player in self.players}
             
@@ -440,7 +431,7 @@ class Game:
                 for player in self.players
             }
             
-            # print(allocations)
+            #print(allocations)
 
             # Initialize a dictionary to store masks for each player
             masks = {}
@@ -455,28 +446,61 @@ class Game:
 
                 # Use broadcasting to compare candidates with player allocations
                 player_mask = cp.any(candidates_expanded == player_allocations_expanded, axis=2)
-
+                #print(player_mask)
                 # Store the mask for the current player
                 masks[player.name] = player_mask
 
-            #print(masks)
+            #print("Player occupancy masks", masks)
 
             # Calculate win probabilities for each player
             win_probs = cp.array([player.win_value for player in self.players])
             
             # Normalize win probabilities for each candidate
             win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
-            
+            #print(win_probs_normalized)
             # Randomly select winners based on win probabilities for each possible candidate
+
+            # THIS LINE IS THE PROBLEM
+            '''
+            Here we're assigning a winner for each candidate in the category as if there were collisions at every possible candidate.
+            The reason this is problematic is because we want to check the conditionals for each player mask.
+                So the logic we need to deploy is:
+                    for each candidate, 
+                    check the mask of each player.
+                    if both masks are true, then we consult the winners array to see who wins, else we set the winners array to be either the sole player competing or -1
+            '''
             winners = cp.random.choice(len(self.players), size=(batch_size, category.size), p=win_probs_normalized)
-            #print(winners)
+            
+            # Apply the logic described above in a vectorized way
+            # Initialize a new winners array with -1, indicating no winner by default
+            new_winners = cp.full((batch_size, category.size), -1, dtype=int)
+
+            # Iterate over each player to update the new_winners array
+            for i, player in enumerate(self.players):
+                # Get the mask for the current player
+                player_mask = masks[player.name]
+                
+                # Determine where the current player is the sole competitor
+                sole_competitor = player_mask & (cp.sum(cp.stack([masks[p.name] for p in self.players]), axis=0) == 1)
+                #print("Player", i, "is the sole competitor in", sole_competitor)
+                # Update new_winners where the current player is the sole competitor
+                new_winners = cp.where(sole_competitor, i, new_winners)
+
+            # Determine where there are multiple competitors
+            multiple_competitors = cp.sum(cp.stack([masks[p.name] for p in self.players]), axis=0) > 1
+
+            # Use the original winners array to resolve ties where there are multiple competitors
+            new_winners = cp.where(multiple_competitors, winners, new_winners)
+            #print(new_winners)
 
 
             # Collect samples for winners
             for i, player in enumerate(self.players):
-                winner_mask = (winners == i)
+                winner_mask = (new_winners == i)
                 #print(i, winner_mask)
+                #print("Category", category.name, "player", i, "number of candidates successfully attained over different runs", cp.sum(winner_mask, axis=1))
                 attendees = category.get_samples(cp.sum(winner_mask, axis=1))
+                #print(attendees)
                 batch_results[:, i] += cp.array([cp.sum(att) for att in attendees])
 
 

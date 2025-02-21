@@ -39,7 +39,7 @@ def move_files_in_batch(files):
 
     update_git(files)
 
-def process_file_on_individual_cuda_cores(file_name):
+def process_file_on_individual_cuda_cores(file_name, poly_degree=20):
     """Process a single file using independent CUDA cores for each task."""
     file_path = os.path.join(STARTED_FOLDER, file_name)
 
@@ -57,21 +57,26 @@ def process_file_on_individual_cuda_cores(file_name):
 
     # Prepare CUDA streams for independent calculations
     streams = [cp.cuda.Stream() for _ in range(num_rows)]
-    results = cp.zeros((num_rows, 2), dtype=cp.float32)  # For storing "underdog_mean" and "underdog_variance"
+    results = cp.zeros((num_rows, poly_degree+3), dtype=cp.float32)  # For storing the polynomial coefficients + "underdog_mean" and "underdog_variance"
 
     # Launch tasks on different CUDA streams
     for i in range(num_rows):
         with streams[i]:
             row = df_gpu[i]
-            result = process_row(pd.Series(row.tolist()))  # Use the existing row processing logic
-            results[i, 0] = result[0]  # underdog_mean
-            results[i, 1] = result[1]  # underdog_variance
+            result = process_row(pd.Series(row.tolist()), poly_degree=poly_degree)  # Use the existing row processing logic
+            for j in range(poly_degree+1):
+                results[i, j] = result[0][j]
+            
+            results[i, poly_degree+1] = result[1]  # underdog_mean
+            results[i, poly_degree+2] = result[2]  # underdog_std
 
     # Synchronize all streams
     cp.cuda.Stream.null.synchronize()
 
     # Extract results back to CPU and store in DataFrame
-    df["underdog_mean"] = cp.asnumpy(results[:, 0])
+    for i in range(len(poly_degree+1)):
+        df[str(i)] = cp.asnumpy(results[:])
+    df["underdog_mean"] = cp.asnumpy(results[:, 1])
     df["underdog_variance"] = cp.asnumpy(results[:, 1])
 
     # Save the processed file
@@ -85,7 +90,7 @@ if __name__ == "__main__":
     # Detect GPU availability
     if not cp.cuda.runtime.getDeviceCount():
         raise RuntimeError("No compatible GPU detected. Ensure that CUDA is properly installed and configured.")
-    print(f"Using GPU: {cp.cuda.get_current_device().name}")
+    print(f"Using GPU: {cp.cuda.Device().name}")
 
     while True:
         # Pull the latest changes from the remote repository

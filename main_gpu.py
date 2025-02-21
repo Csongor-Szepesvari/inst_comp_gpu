@@ -14,13 +14,13 @@ import numpy as np
 import time as t
 import scipy.stats as stats
 from scipy.optimize import curve_fit
-
+import matplotlib.pyplot as plt
 def polynomial_pdf(x, *coeffs):
     """Polynomial function constrained to be non-negative."""
     poly = np.polyval(coeffs, x)
     return np.maximum(poly, 0)  # Ensure non-negativity
 
-def process_row(row, verbose=False, poly_degree=3):
+def process_row(row, verbose=False, poly_degree=20, visualize=False):
     '''
     Process row takes a row from a dataframe, runs an experiment, simulates the outcome, and returns the results.
     It also fits a probability distribution function using polynomial regression.
@@ -106,12 +106,12 @@ def process_row(row, verbose=False, poly_degree=3):
     game.find_strategies_iterated_br()
 
     print("Underdog strategy:")
-    print(game.players[0].strategy)
+    print({category.name: game.players[0].strategy[category.name]*category.size for category in game.categories.values()})
     print("Favorite strategy:")
-    print(game.players[1].strategy)
+    print({category.name: game.players[1].strategy[category.name]*category.size for category in game.categories.values()})
 
     # *** TASK 3: Simulate and store results ***
-    num_runs = 10
+    num_runs = 5000
     # Run all game simulations concurrently on the GPU by passing the total number of runs
     results = game.simulate_game_batch(num_runs)
 
@@ -120,16 +120,38 @@ def process_row(row, verbose=False, poly_degree=3):
     # Convert results to NumPy
     results_np = cp.asnumpy(results)
 
+
+
+    mean = np.mean(results_np)
+    std = np.std(results_np)
+
     # Estimate empirical density (normalized histogram)
-    hist_values, bin_edges = np.histogram(results_np, bins=50, density=True)
+    hist_values, bin_edges = np.histogram(results_np, bins=100, density=True)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
     # Fit a polynomial to the empirical density function
     poly_coeffs, _ = curve_fit(polynomial_pdf, bin_centers, hist_values, p0=np.ones(poly_degree + 1))
-    # Poly_coeffs is a list of the coefficients of the polynomial used to fit the data
+    
+    # Optionally, plot the histogram
+    if visualize:
+        plt.plot(bin_centers, hist_values)
+        plt.show()
+        
 
-    mean = np.mean(results_np)
-    std = np.std(results_np)
+
+
+        # Poly_coeffs is a list of the coefficients of the polynomial used to fit the data
+        # Regenerate the data using the polynomial coefficients
+        x = np.linspace(0, 1, 1000) # grab x values between 0 and 1
+        y = np.polyval(poly_coeffs, x)
+        
+        # Plot the regenerated data alongside the histogram
+        plt.figure()
+        plt.plot(x, y, 'r-', label='Fitted polynomial')
+        plt.hist(results_np, bins=50, density=True, alpha=0.5, label='Original data')
+        plt.legend()
+        plt.title('Original Histogram vs Polynomial Fit')
+        plt.show()
 
     end = t.time()
 
@@ -146,7 +168,7 @@ def process_row(row, verbose=False, poly_degree=3):
 # Test the function by importing a single file from the not_started folder
 # Run the function on a single row of the file
 # Print the results
-
+'''
 if __name__ == "__main__":
     import pandas as pd
     # Import a single file from the not_started folder
@@ -159,10 +181,15 @@ if __name__ == "__main__":
     # print the header
     
     print(df.columns)
-    row = df.iloc[1]
+    row = df.iloc[3]
     print(row)
     #print()
     results = process_row(row)
-    #print(results)
-
+    print(results)
+    output_row = pd.concat([row, pd.Series(results[0], name='poly_coeffs'), pd.Series([results[1], results[2]], index=['mean', 'std'])]).to_frame().T
+    # Check if file exists to determine if we need to write headers
+    output_file = f'display/{os.path.splitext(os.path.basename(file_path))[0]}.csv'
+    write_header = not os.path.exists(output_file)
+    output_row.to_csv(output_file, mode='a', header=write_header, index=False)
+'''
 
