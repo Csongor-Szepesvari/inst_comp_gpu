@@ -90,7 +90,17 @@ if __name__ == "__main__":
     # Detect GPU availability
     if not cp.cuda.runtime.getDeviceCount():
         raise RuntimeError("No compatible GPU detected. Ensure that CUDA is properly installed and configured.")
-    print(f"Using GPU: {cp.cuda.Device().name}")
+    device = cp.cuda.Device()
+    print(f"Using GPU: {device.id} - {device.compute_capability}")
+
+    # Get thread information
+    attrs = device.attributes
+    print(f"Max threads per block: {attrs['MaxThreadsPerBlock']}")
+    print(f"Max threads per multiprocessor: {attrs['MaxThreadsPerMultiProcessor']}")
+    print(f"Max grid dimensions: {attrs['MaxGridDimX']}, {attrs['MaxGridDimY']}, {attrs['MaxGridDimZ']}")
+    #print(attrs.keys())
+
+
 
     while True:
         # Pull the latest changes from the remote repository
