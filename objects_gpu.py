@@ -69,13 +69,12 @@ def transform_mu_sigma_to_log(mu, sigma):
     mu_log = cp.log(mu) / 2
     return mu_log, sigma_log
 
-def generate_samples_top_k(categories, dist_type, top_k=None):
+def generate_samples_top_k(categories, top_k=None):
     """
     Generate samples for the top-k computation using GPU acceleration.
 
     Parameters:
-        categories (list of tuples): List of (n, mu, sigma) for each category.
-        dist_type (str): Either 'normal' or 'lognormal'.
+        categories (list of tuples): List of (dist_type, mu, sigma, n) for each category.
         top_k (int): Optional, number of top values to return.
 
     Returns:
@@ -84,44 +83,14 @@ def generate_samples_top_k(categories, dist_type, top_k=None):
     outcomes = cp.concatenate([
         cp.random.lognormal(mu, sigma, int(n)) if dist_type == 'log' else
         cp.random.normal(mu, sigma, int(n))
-        for n, mu, sigma in categories
+        for dist_type, mu, sigma, n in categories
     ])
 
     if top_k is not None:
         outcomes = cp.sort(outcomes)[-top_k:]
     return outcomes
 
-def eval_particular_distribution(categories, dist_type, memo, top_k=None, verbose=False):
-    """
-    Evaluate the expected value for a particular distribution using GPU.
 
-    Parameters:
-        categories (list of tuples): List of (n, mu, sigma) for each category.
-        dist_type (str): Either 'normal' or 'lognormal'.
-        memo (dict): Cache to avoid redundant calculations.
-        top_k (int): Optional, number of top values to consider.
-        verbose (bool): If True, prints progress.
-
-    Returns:
-        float: Estimated expected value.
-    """
-    # Check the memo cache
-    key = (tuple(categories), dist_type, top_k)
-    if key in memo:
-        return memo[key]
-
-    # Estimate the number of replicates    
-    num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, top_k, dist_type), 50000)) if dist_type == 'log' else max(1000, min(num_replicates, 10000))
-    
-
-    outcomes = cp.mean(cp.stack([
-        cp.mean(generate_samples_top_k(categories, dist_type, top_k=top_k))
-        for _ in range(num_replicates)
-    ]))
-
-    # Store the result in memo and return the mean outcome
-    memo[key] = outcomes.get()
-    return memo[key]
 
 class Category:
     def __init__(self, name, mu, sigma, size, log_or_normal):
@@ -166,7 +135,7 @@ class Player:
         self.name = name
 
     ...
-    def convert_category_strategy_to_evaluator(self, game):
+    def convert_category_strategy_to_evaluator(self, game, temp_strategy):
         """
         Converts the player's category-level strategy into a tuple representation for evaluation.
         
@@ -181,7 +150,7 @@ class Player:
                 "log" if category.log_normal else "normal",
                 category.mu,
                 category.sigma,
-                int(category.size * self.strategy[category_name])
+                int(category.size * temp_strategy[category_name])
             )
             for category_name, category in game.categories.items()
         )
@@ -231,25 +200,24 @@ class Player:
         Parameters:
             game (Game): The game object.
             feasible_strategy_numbers (dict): Maximum feasible strategy numbers for each category.
-            k (int): Number of top-k values to consider.
             blind (bool, optional): Whether the player is blind to strategy optimizations.
         """
         to_admit = game.to_admit
-        new_strategy = {category.get_name(): 0 for category in game.categories.values()}
+        new_strategy = {category.name: 0 for category in game.categories.values()}
 
         if not blind:
             for _ in range(to_admit):
                 max_val = float('-inf')
                 max_cat = None
                 for category in game.categories.values():
-                    if new_strategy[category.get_name()] < feasible_strategy_numbers[category.get_name()]:
+                    if new_strategy[category.name] < feasible_strategy_numbers[category.name]:
                         temp_strategy = new_strategy.copy()
-                        temp_strategy[category.get_name()] += 1
-                        category_tuple = game.convert_category_strategy_to_evaluator(temp_strategy)
-                        val = eval_particular_distribution(category_tuple, game.top_k)
+                        temp_strategy[category.name] += 1
+                        category_tuple = self.convert_category_strategy_to_evaluator(game, temp_strategy)
+                        val = game.eval_particular_distribution(category_tuple)
                         if val > max_val:
                             max_val = val
-                            max_cat = category.get_name()
+                            max_cat = category.name
                 new_strategy[max_cat] += 1
 
             self.strategy = {key: value / feasible_strategy_numbers[key] for key, value in new_strategy.items()}
@@ -280,7 +248,7 @@ class Player:
         }
         #print("Prints player name and the \"achievable\" numbers from maxing out each category",self.name, feasible_numbers)
         if game.game_mode_type == "top_k":
-            self.greedy_top_k_br(game, feasible_numbers, game.top_k, self.blind)
+            self.greedy_top_k_br(game, feasible_numbers, self.blind)
         elif game.game_mode_type == "expected":
             to_admit = game.to_admit
             new_strategy = {key: 0 for key in self.strategy.keys()}
@@ -321,6 +289,7 @@ class Game:
         self.top_k = top_k
         self.log_normal = log_normal
         self.verbose = verbose
+        self.memo = {}
 
     def find_strategies_iterated_br(self):
         """
@@ -329,52 +298,45 @@ class Game:
         Each player updates their strategy until a stable profile is found.
         """
         previous_strategies = None
+        level = 0
         while previous_strategies != [player.strategy for player in self.players]:
             previous_strategies = [player.strategy.copy() for player in self.players]
             for player in self.players:
-                player.best_response(self)
+                if level < player.level:
+                    player.best_response(self)
+            level += 1
 
-    def simulate_game(self):
+    def eval_particular_distribution(self, categories, verbose=False):
         """
-        Simulate the game based on player strategies and resolve outcomes.
+        Evaluate the expected value for a particular distribution using GPU.
+
+        Parameters:
+            categories (list of tuples): List of (n, mu, sigma) for each category.
+            dist_type (str): Either 'normal' or 'lognormal'.
+            memo (dict): Cache to avoid redundant calculations.
+            top_k (int): Optional, number of top values to consider.
+            verbose (bool): If True, prints progress.
 
         Returns:
-            cp.ndarray: Array of 'pct_total_util' for each player.
+            float: Estimated expected value.
         """
-        attendees = {player.name: [] for player in self.players}
+        # Check the memo cache
+        key = (categories, self.top_k)
+        if key in self.memo:
+            return self.memo[key]
+
+        # Estimate the number of replicates    
+        num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, self.top_k), 50000)) if categories[0][0] == 'log' else max(1000, min(num_replicates, 10000))
         
-        for category in self.categories.values():
-            candidates = cp.arange(category.size)
-            
-            # Vectorized allocation of candidates to players
-            allocations = {
-                player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
-                for player in self.players
-            }
-            print(allocations)
-            # Create a boolean mask for each player indicating which candidates they have
-            masks = {player.name: cp.isin(candidates, allocations[player.name]) for player in self.players}
-            
-            
-            # Calculate win probabilities for each player
-            win_probs = cp.array([player.win_value for player in self.players])
-            
-            # Normalize win probabilities for each candidate
-            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
-            
-            # Randomly select winners based on win probabilities for each possible candidate
-            winners = cp.random.choice(len(self.players), size=category.size, p=win_probs_normalized)
-            print(winners)
-            # If the boolean mask overlaps with winners for a player, add that sample to the player's attendees
-            for i, player in enumerate(self.players):
-                winner_mask = (winners == i)
-                attendees[player.name].extend(category.get_samples(cp.sum(winner_mask)))
 
-        # Calculate utilities and extract 'pct_total_util' for each player
-        utilities = self.calculate_utilities(attendees)
-        pct_total_util_array = cp.array([utilities[player.name]['pct_total_util'] for player in self.players])
+        outcomes = cp.mean(cp.stack([
+            cp.mean(generate_samples_top_k(categories, top_k=self.top_k))
+            for _ in range(num_replicates)
+        ]))
 
-        return pct_total_util_array
+        # Store the result in memo and return the mean outcome
+        self.memo[key] = outcomes.get()
+        return self.memo[key]
 
     def calculate_utilities(self, attendees):
         """
@@ -510,3 +472,51 @@ class Game:
         pct_total_util_array = batch_results / total_utilities
 
         return pct_total_util_array
+
+
+
+
+'''Outdated code below this line'''
+'''
+    def simulate_game(self):
+        """
+        Simulate the game based on player strategies and resolve outcomes.
+
+        Returns:
+            cp.ndarray: Array of 'pct_total_util' for each player.
+        """
+        attendees = {player.name: [] for player in self.players}
+        
+        for category in self.categories.values():
+            candidates = cp.arange(category.size)
+            
+            # Vectorized allocation of candidates to players
+            allocations = {
+                player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
+                for player in self.players
+            }
+            print(allocations)
+            # Create a boolean mask for each player indicating which candidates they have
+            masks = {player.name: cp.isin(candidates, allocations[player.name]) for player in self.players}
+            
+            
+            # Calculate win probabilities for each player
+            win_probs = cp.array([player.win_value for player in self.players])
+            
+            # Normalize win probabilities for each candidate
+            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
+            
+            # Randomly select winners based on win probabilities for each possible candidate
+            winners = cp.random.choice(len(self.players), size=category.size, p=win_probs_normalized)
+            print(winners)
+            # If the boolean mask overlaps with winners for a player, add that sample to the player's attendees
+            for i, player in enumerate(self.players):
+                winner_mask = (winners == i)
+                attendees[player.name].extend(category.get_samples(cp.sum(winner_mask)))
+
+        # Calculate utilities and extract 'pct_total_util' for each player
+        utilities = self.calculate_utilities(attendees)
+        pct_total_util_array = cp.array([utilities[player.name]['pct_total_util'] for player in self.players])
+
+        return pct_total_util_array
+'''

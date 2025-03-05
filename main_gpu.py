@@ -14,7 +14,7 @@ import numpy as np
 import time as t
 import scipy.stats as stats
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 def polynomial_pdf(x, *coeffs):
     """Polynomial function constrained to be non-negative."""
     poly = np.polyval(coeffs, x)
@@ -86,7 +86,7 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
         )
 
     size = sum(category.size for category in categories_dict.values())
-    print(size)
+    #print(size)
     to_admit = min(size//2,int((row['pct_high_mean'] * row['pct_total'] * size) // 2))
 
     top_k = None if row['game_mode'] == 'expected' else int(to_admit * 0.2)
@@ -101,15 +101,18 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
         log_normal=row['lognormal'],
         verbose=verbose
     )
-    print([category.mean for category in categories_dict.values()])
+
+
+    #print([category.mean for category in categories_dict.values()])
     # *** TASK 2: Find the equilibrium ***
     game.find_strategies_iterated_br()
 
+    '''
     print("Underdog strategy:")
     print({category.name: game.players[0].strategy[category.name]*category.size for category in game.categories.values()})
     print("Favorite strategy:")
     print({category.name: game.players[1].strategy[category.name]*category.size for category in game.categories.values()})
-
+    '''
     # *** TASK 3: Simulate and store results ***
     num_runs = 5000
     # Run all game simulations concurrently on the GPU by passing the total number of runs

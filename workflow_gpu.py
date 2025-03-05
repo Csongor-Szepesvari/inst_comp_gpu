@@ -4,7 +4,8 @@ import pandas as pd
 from git import Repo
 import cupy as cp
 import datetime
-from main_gpu import process_row
+import main_gpu
+from multiprocessing import Pool, cpu_count
 
 # Define folders
 BASE_DIR = os.getcwd()
@@ -39,52 +40,40 @@ def move_files_in_batch(files):
 
     update_git(files)
 
-def process_file_on_individual_cuda_cores(file_name, poly_degree=20):
-    """Process a single file using independent CUDA cores for each task."""
+def process_file(file_name):
+    """Process a single file: move, process, and finalize."""
     file_path = os.path.join(STARTED_FOLDER, file_name)
 
     if not file_name.endswith(".csv"):
         print(f"Skipped {file_name}: Not a CSV.")
         return
-
-    # Read the file into a DataFrame
+    print("Currently processing", file_name)
+    # Read and process the file
     df = pd.read_csv(file_path)
 
-    # Move data to GPU
-    print("Processing file on individual CUDA cores: ", file_name)
-    df_gpu = cp.array(df.to_numpy(), dtype=object)
-    num_rows = df_gpu.shape[0]
-
-    # Prepare CUDA streams for independent calculations
-    streams = [cp.cuda.Stream() for _ in range(num_rows)]
-    results = cp.zeros((num_rows, poly_degree+3), dtype=cp.float32)  # For storing the polynomial coefficients + "underdog_mean" and "underdog_variance"
-
-    # Launch tasks on different CUDA streams
-    for i in range(num_rows):
-        with streams[i]:
-            row = df_gpu[i]
-            result = process_row(pd.Series(row.tolist()), poly_degree=poly_degree)  # Use the existing row processing logic
-            for j in range(poly_degree+1):
-                results[i, j] = result[0][j]
-            
-            results[i, poly_degree+1] = result[1]  # underdog_mean
-            results[i, poly_degree+2] = result[2]  # underdog_std
-
-    # Synchronize all streams
-    cp.cuda.Stream.null.synchronize()
-
-    # Extract results back to CPU and store in DataFrame
-    for i in range(len(poly_degree+1)):
-        df[str(i)] = cp.asnumpy(results[:])
-    df["underdog_mean"] = cp.asnumpy(results[:, 1])
-    df["underdog_variance"] = cp.asnumpy(results[:, 1])
+    # Process each row and expand the results into separate columns
+    results = df.apply(main_gpu.process_row, axis=1, result_type='expand')
+    poly_degree = len(results.iloc[0][0])  # Get the number of polynomial coefficients
+    df = pd.concat([
+        df,
+        results[0].apply(pd.Series).rename(columns=lambda x: f'coef_{x}'),
+        results[1].rename('mean'),
+        results[2].rename('std')
+    ], axis=1)
 
     # Save the processed file
     finished_path = os.path.join(FINISHED_FOLDER, file_name)
     df.to_csv(finished_path, index=False)
-    print(f"Processed {file_name} and saved to 'finished'.")
+
+    # now remove this file from the started path
     os.remove(file_path)
-    return file_path, finished_path
+
+    # update tracking in git
+    repo.index.add([dst])
+    repo.index.remove([src])
+
+
+    print(f"Processed and moved {file_name} to 'finished'.")
 
 if __name__ == "__main__":
     # Detect GPU availability
@@ -108,7 +97,7 @@ if __name__ == "__main__":
         origin.pull()
 
         # Get the list of files in the 'not_started' folder (up to 100 files)
-        files = os.listdir(NOT_STARTED_FOLDER)[:min(100, len(os.listdir(NOT_STARTED_FOLDER)))]
+        files = os.listdir(NOT_STARTED_FOLDER)[:min(10, len(os.listdir(NOT_STARTED_FOLDER)))]
 
         if not files:
             print("No more files to process in 'not_started'. Exiting.")
@@ -123,10 +112,14 @@ if __name__ == "__main__":
 
         move_files_in_batch(batch_moves)
 
-        # Process files using independent CUDA cores
-        now = datetime.datetime.now()
-        print("Starting processing batch at:", now.time())
-        for file_name in files:
-            process_file_on_individual_cuda_cores(file_name)
+        # Use multiprocessing Pool to process files concurrently
+        num_cores = cpu_count()
+        with Pool(num_cores-2) as pool:
+            pool.map(process_file, files)
 
-        print("Finished processing batch of files. Updating Git.")
+        # push the changes to github
+        repo.index.commit(f"Moved {len(files)} files in batch.")
+        origin = repo.remote(name="origin")
+        origin.pull()
+        origin.push()
+        
