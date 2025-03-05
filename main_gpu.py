@@ -105,8 +105,10 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
 
     #print([category.mean for category in categories_dict.values()])
     # *** TASK 2: Find the equilibrium ***
+    start = t.time()
     game.find_strategies_iterated_br()
-
+    end = t.time()
+    print(f"Finding stable strategies took {end-start} seconds.")
     '''
     print("Underdog strategy:")
     print({category.name: game.players[0].strategy[category.name]*category.size for category in game.categories.values()})
@@ -114,6 +116,7 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
     print({category.name: game.players[1].strategy[category.name]*category.size for category in game.categories.values()})
     '''
     # *** TASK 3: Simulate and store results ***
+    start = t.time()
     num_runs = 5000
     # Run all game simulations concurrently on the GPU by passing the total number of runs
     results = game.simulate_game_batch(num_runs)
@@ -134,30 +137,9 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
 
     # Fit a polynomial to the empirical density function
     poly_coeffs, _ = curve_fit(polynomial_pdf, bin_centers, hist_values, p0=np.ones(poly_degree + 1))
-    
-    # Optionally, plot the histogram
-    if visualize:
-        plt.plot(bin_centers, hist_values)
-        plt.show()
-        
-
-
-
-        # Poly_coeffs is a list of the coefficients of the polynomial used to fit the data
-        # Regenerate the data using the polynomial coefficients
-        x = np.linspace(0, 1, 1000) # grab x values between 0 and 1
-        y = np.polyval(poly_coeffs, x)
-        
-        # Plot the regenerated data alongside the histogram
-        plt.figure()
-        plt.plot(x, y, 'r-', label='Fitted polynomial')
-        plt.hist(results_np, bins=50, density=True, alpha=0.5, label='Original data')
-        plt.legend()
-        plt.title('Original Histogram vs Polynomial Fit')
-        plt.show()
 
     end = t.time()
-
+    print(f"Simulating our games took {end-start} seconds.")
 
     if verbose:
         print()
