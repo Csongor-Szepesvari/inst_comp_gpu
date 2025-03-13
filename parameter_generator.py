@@ -5,19 +5,19 @@ import os
 import csv
 
 # Game-specific setup
-total_occupancy_high_setting = [0.98, 0.99, 1, 1.01, 1.02, 1.05, 1.1, 1.25, 1.5, 1.75]
+total_occupancy_high_setting = [0.98, 0.99, 1, 1.01, 1.02, 1.05, 1.25, 1.5, 1.75]
 game_modes = ["expected", "top_k"]
 
 # Player-relevant variables
-win_values_underdog = [0.01, 0.025, 0.04, 0.05, 0.075, 0.1, 0.25, 0.3, 0.35, 0.4, 0.5]  # 0.05, 0.1, ..., 0.5
+win_values_underdog = [0.01, 0.025, 0.04, 0.05, 0.075, 0.1, 0.25, 0.4, 0.5]  # 0.05, 0.1, ..., 0.5
 blind_combos = [[False, False], [False, True]]
 levels = [[100, 0], [100, 100]]
 
 # Category-relevant variables
-log_or_normal = ['log', 'normal']
+log_or_normal = ['normal']
 percent_pop_high_mean = [i / 10 for i in range(1, 5)]  # 0.1, 0.2, ..., 0.4
-high_low_ratio_means = [i / 10 for i in range(12, 21, 2)]  # 1.2, 1.4, ..., 2.0
-high_low_ratio_variances = [i / 10 for i in range(12, 21, 2)]
+high_low_ratio_means = [i / 10 for i in range(12, 21, 4)]  # 1.2, 1.4, ..., 2.0
+high_low_ratio_variances = [i / 10 for i in range(12, 21, 4)]
 mean_variance_ratios = [i / 100 for i in range(50, 151, 25)]  # 0.5, 0.75, ..., 1.5
 percent_pop_high_variance = [i / 10 for i in range(1, 5)]
 
@@ -49,8 +49,8 @@ for pct_total in total_occupancy_high_setting:
                                                 mean_variance_ratio, pct_high_sigma
                                             ])
 
-                                            # Write to CSV every 1000 combinations
-                                            if len(combinations) == 1000:
+                                            # Write to CSV every 100 combinations
+                                            if len(combinations) == 100:
                                                 filename = os.path.join(
                                                     output_folder,
                                                     f"params_file_{file_counter:03d}_occupancy{pct_total}_mode{game_mode}.csv"

@@ -289,6 +289,7 @@ class Game:
         self.top_k = top_k
         self.log_normal = log_normal
         self.verbose = verbose
+
         self.memo = {}
 
     def find_strategies_iterated_br(self):
@@ -337,6 +338,8 @@ class Game:
         # Store the result in memo and return the mean outcome
         self.memo[key] = outcomes.get()
         return self.memo[key]
+
+
 
     def calculate_utilities(self, attendees):
         """
