@@ -23,15 +23,28 @@ repo = Repo(REPO_DIR)
 if repo.bare:
     raise Exception("Not a valid Git repository")
 
+# Ensure 'master' is the active branch
+if "master" in repo.heads:
+    master_branch = repo.heads["master"]
+    master_branch.checkout()
+else:
+    raise Exception("'master' branch does not exist in the repository.")
+
+
+
 def update_git(files):
     """Commit and push changes to Git."""
+    origin.pull()
     for src, dst in files:
         repo.index.add([dst])
         repo.index.remove([src])
     repo.index.commit(f"Moved {len(files)} files in batch.")
-    origin = repo.remote(name="origin")
-    origin.pull()
-    origin.push()
+    
+    # Fetch updates from the remote
+    origin.fetch()
+
+    # Push changes to the remote
+    origin.push(refspec=f"master:master")  # Push local 'master' to remote 'master'
 
 def move_files_in_batch(files):
     """Move a batch of files from their source to their destination."""

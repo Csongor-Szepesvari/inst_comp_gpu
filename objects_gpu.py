@@ -405,7 +405,7 @@ class Game:
 
             # Vectorized allocation of candidates to players for each game in the batch
             allocations = {
-                player.name: np.array([np.random.choice(candidates[0], size=int(np.round(player.strategy[category.name] * category.size)), replace=False) for _ in range(batch_size)])
+                player.name: np.array([np.random.choice(candidates[0], size=max(category.size, int(np.round(player.strategy[category.name] * category.size))), replace=False) for _ in range(batch_size)])
                 for player in self.players
             }
             
