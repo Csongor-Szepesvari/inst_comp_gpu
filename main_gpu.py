@@ -4,8 +4,8 @@ This file's job is to contain a single function that processes a single row from
 The tasks are as follows:
 1. Generate all of the objects necessary from the row description
 2. Find the equilibrium
-3. Simulate game 1000 times
-4. Fit a probability distribution to estimate the outcomes
+3. Simulate game 5000 times
+4. Store a histogram
 '''
 
 from objects_gpu import Game, Player, Category
@@ -13,6 +13,7 @@ import numpy as np
 import time as t
 import scipy.stats as stats
 from scipy.optimize import curve_fit
+import pandas as pd
 #import matplotlib.pyplot as plt
 def polynomial_pdf(x, *coeffs):
     """Polynomial function constrained to be non-negative."""
@@ -129,37 +130,27 @@ def process_row(row, verbose=False, poly_degree=10, visualize=False):
 
     # Estimate empirical density (normalized histogram)
     hist_values, bin_edges = np.histogram(results, bins=100, density=True)
-    hist_values = hist_values.astype(np.float64)   
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    hist_values = hist_values.astype(np.float64)
 
-    try: 
-        # Fit a polynomial to the empirical density function
-        poly_coeffs, _ = curve_fit(polynomial_pdf, bin_centers, hist_values, p0=np.ones(poly_degree + 1))
-    except Exception as e:
-        print()
-        print(results)
-        print()
-        print("Bin centers:", bin_centers)
-        print("Hist values:", hist_values)
-        print("Any NaN in bin_centers:", np.any(np.isnan(bin_centers)))
-        print("Any NaN in hist_values:", np.any(np.isnan(hist_values)))
-        print("Any inf in bin_centers:", np.any(np.isinf(bin_centers)))
-        print("Any inf in hist_values:", np.any(np.isinf(hist_values)))
-        print("Couldn't fit a polynomial to these curves for some reason")
-        print(e)
-        poly_coeffs = np.zeros(poly_degree + 1)
-        print()
+    # Flatten the histogram data into a single row
+    histogram_row = np.concatenate([bin_edges, hist_values])
+
+    # Create a DataFrame with the histogram data
+    histogram_df = pd.DataFrame([histogram_row])
+
+    # Add metadata columns (e.g., mean, std) to the DataFrame
+    histogram_df['mean'] = mean
+    histogram_df['std'] = std
 
     end = t.time()
     #print(f"Simulating our games took {end-start} seconds.")
 
     if verbose:
         print()
-        print("Evaluation:")
-        print(f'{num_runs} runs resulted in a fitted probability distribution with polynomial coefficients: {poly_coeffs}')
+        print("Evaluation")
         print(f'Took {end - start} seconds to run one experiment with {num_runs} simulations.')
 
-    return poly_coeffs, mean, std
+    return histogram_df
 
 
 # Test the function by importing a single file from the not_started folder

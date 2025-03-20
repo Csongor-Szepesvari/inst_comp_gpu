@@ -54,14 +54,10 @@ def process_file(file_name):
     start = t.time()
 
     # Process each row and expand the results into separate columns
-    results = df.apply(main_gpu.process_row, axis=1, result_type='expand')
-    poly_degree = len(results.iloc[0][0])  # Get the number of polynomial coefficients
-    df = pd.concat([
-        df,
-        results[0].apply(pd.Series).rename(columns=lambda x: f'coef_{x}'),
-        results[1].rename('mean'),
-        results[2].rename('std')
-    ], axis=1)
+    # Apply process_row to each row in the DataFrame
+    histogram_dfs = df.apply(main_gpu.process_row, axis=1)
+    # Concatenate the resulting histogram DataFrames with the original DataFrame
+    df = pd.concat([df, pd.concat(histogram_dfs.tolist(), ignore_index=True)], axis=1)
 
     # Save the processed file
     finished_path = os.path.join(FINISHED_FOLDER, file_name)
@@ -80,21 +76,7 @@ def process_file(file_name):
     print(f"Processed and moved {file_name} to 'finished'. Took {end-start} seconds to finish a file")
 
 if __name__ == "__main__":
-    # Detect GPU availability
-    if not cp.cuda.runtime.getDeviceCount():
-        raise RuntimeError("No compatible GPU detected. Ensure that CUDA is properly installed and configured.")
-    device = cp.cuda.Device()
-    print(f"Using GPU: {device.id} - {device.compute_capability}")
-
-    # Get thread information
-    attrs = device.attributes
-    print(f"Max threads per block: {attrs['MaxThreadsPerBlock']}")
-    print(f"Max threads per multiprocessor: {attrs['MaxThreadsPerMultiProcessor']}")
-    print(f"Max grid dimensions: {attrs['MaxGridDimX']}, {attrs['MaxGridDimY']}, {attrs['MaxGridDimZ']}")
-    #print(attrs.keys())
-
-
-
+    
     while True:
         # Pull the latest changes from the remote repository
         origin = repo.remote(name="origin")

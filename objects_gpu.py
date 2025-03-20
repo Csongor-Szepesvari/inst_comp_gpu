@@ -309,7 +309,7 @@ class Game:
         while previous_strategies != [player.strategy for player in self.players]:
             previous_strategies = [player.strategy.copy() for player in self.players]
             for player in self.players:
-                if level <= player.level:
+                if player.level >= level:
                     player.best_response(self)
             level += 1
 
@@ -495,6 +495,8 @@ class Game:
                     batch_results[game_idx, i] = np.sum(all_attendees[player.name][game_idx])
 
         
+        # make sure we're not getting exactly 0 value
+        batch_results = np.where(batch_results == 0, 1e-10, batch_results)
 
         # Calculate total_utilities
         total_utilities = np.sum(batch_results, axis=1, keepdims=True)
