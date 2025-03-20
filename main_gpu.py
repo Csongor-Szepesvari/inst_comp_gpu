@@ -107,7 +107,7 @@ def process_row(row, verbose=False, poly_degree=10, visualize=False):
     start = t.time()
     game.find_strategies_iterated_br()
     end = t.time()
-    print(f"Finding stable strategies took {end-start} seconds.")
+    #print(f"Finding stable strategies took {end-start} seconds.")
     '''
     print("Underdog strategy:")
     print({category.name: game.players[0].strategy[category.name]*category.size for category in game.categories.values()})
@@ -151,7 +151,7 @@ def process_row(row, verbose=False, poly_degree=10, visualize=False):
         print()
 
     end = t.time()
-    print(f"Simulating our games took {end-start} seconds.")
+    #print(f"Simulating our games took {end-start} seconds.")
 
     if verbose:
         print()

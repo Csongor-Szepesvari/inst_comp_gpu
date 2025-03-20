@@ -1,6 +1,6 @@
-import cupy as np
 from scipy.stats import norm
 import numpy as np
+import warnings
 
 def calculate_replicates_for_top_k(
     params,          # List of (dist_type, mu, sigma, sample_size) tuples
@@ -79,7 +79,7 @@ def generate_samples_top_k(categories, top_k=None):
         top_k (int): Optional, number of top values to return.
 
     Returns:
-        cupy.ndarray: Array of sampled outcomes (sorted if top_k is specified).
+        np.ndarray: Array of sampled outcomes (sorted if top_k is specified).
     """
     outcomes = np.concatenate([
         np.random.lognormal(mu, sigma, int(n)) if dist_type == 'log' else
@@ -111,9 +111,14 @@ class Category:
         samples = []
         for n in sizes:
             if self.log_normal == 'log':
-                samples.append(np.random.lognormal(mean=self.mu, sigma=self.sigma, size=int(n)))
+                # Generate lognormal samples and clamp to >= 0
+                sample = np.random.lognormal(mean=self.mu, sigma=self.sigma, size=int(n))
             else:
-                samples.append(np.random.normal(loc=self.mean, scale=self.std, size=int(n)))
+                # Generate normal samples and clamp to >= 0
+                sample = np.random.normal(loc=self.mean, scale=self.std, size=int(n))
+            # Ensure all samples are >= 0
+            sample = np.maximum(sample, 0)
+            samples.append(sample)
         return samples
 
 
@@ -304,7 +309,7 @@ class Game:
         while previous_strategies != [player.strategy for player in self.players]:
             previous_strategies = [player.strategy.copy() for player in self.players]
             for player in self.players:
-                if level < player.level:
+                if level <= player.level:
                     player.best_response(self)
             level += 1
 
@@ -327,17 +332,21 @@ class Game:
         if key in self.memo:
             return self.memo[key]
 
-        # Estimate the number of replicates    
-        num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, self.top_k), 50000)) if categories[0][0] == 'log' else max(1000, min(num_replicates, 10000))
-        
 
-        outcomes = np.mean(np.stack([
+        replicates = calculate_replicates_for_top_k(categories, self.top_k)
+        # Estimate the number of replicates
+        if categories[0][0] == 'log':
+            num_replicates = max(5000, min(replicates, 50000))
+        else:
+            num_replicates = max(1000, min(replicates, 10000))  # Fixed range for normal distributions
+
+        outcome = np.mean(np.stack([
             np.mean(generate_samples_top_k(categories, top_k=self.top_k))
             for _ in range(num_replicates)
         ]))
 
         # Store the result in memo and return the mean outcome
-        self.memo[key] = outcomes.get()
+        self.memo[key] = outcome
         return self.memo[key]
 
 
@@ -485,12 +494,91 @@ class Game:
                 for game_idx in range(batch_size):
                     batch_results[game_idx, i] = np.sum(all_attendees[player.name][game_idx])
 
-        # Calculate utilities and extract 'pct_total_util' for each player in each game
+        
+
+        # Calculate total_utilities
         total_utilities = np.sum(batch_results, axis=1, keepdims=True)
-        pct_total_util_array = batch_results / total_utilities
+
+        
+
+        # Calculate pct_total_util_array
+        with warnings.catch_warnings(record=True) as w:
+            # Cause all warnings to always be triggered
+            warnings.simplefilter("always")
+            
+            # Perform the division that might raise a RuntimeWarning
+            pct_total_util_array = batch_results / total_utilities
+            # Check if any RuntimeWarning was raised
+            if w and any(issubclass(warn.category, RuntimeWarning) for warn in w):
+                print()
+                print("Game Conditions:")
+                print(f"Game Mode: {self.game_mode_type}")
+                print(f"Top K: {self.top_k}")
+                print(f"To Admit: {self.to_admit}")
+                print(f"Log Normal: {self.log_normal}")
+                print("\nCategory Parameters:")
+                for category in self.categories.values():
+                    print(f"Category {category.name}: mu={category.mu}, sigma={category.sigma}, size={category.size}, distribution={category.log_normal}")
+                print("\nPlayer Strategies:")
+                for player in self.players:
+                    print(f"Player {player.name} (Win Value: {player.win_value}, Blind: {player.blind}, Level: {player.level}):")
+                    for category, strategy in player.strategy.items():
+                        print(f"  {category}: {strategy}")
+                # Debug: Check batch_results
+                print("batch_results:", batch_results)
+                print("Any negative values in batch_results:", np.any(batch_results < 0))
+                print("Any NaN values in batch_results:", np.any(np.isnan(batch_results)))
+                print("Any inf values in batch_results:", np.any(np.isinf(batch_results)))
+                # Debug: Check total_utilities
+                print("total_utilities:", total_utilities)
+                print("Any zero or negative values in total_utilities:", np.any(total_utilities <= 0))
+                print("Any NaN values in total_utilities:", np.any(np.isnan(total_utilities)))
+                print("Any inf values in total_utilities:", np.any(np.isinf(total_utilities)))
+
+                    # Debug: Check pct_total_util_array
+                print("pct_total_util_array:", pct_total_util_array)
+                print("Any values < 0 in pct_total_util_array:", np.any(pct_total_util_array < 0))
+                print("Any values > 1 in pct_total_util_array:", np.any(pct_total_util_array > 1))
+                print("Any NaN values in pct_total_util_array:", np.any(np.isnan(pct_total_util_array)))
+                print("Any inf values in pct_total_util_array:", np.any(np.isinf(pct_total_util_array)))
+
+                print(w)
+
+        
 
         # Add validation check
-        if np.any(pct_total_util_array < 0) or np.any(pct_total_util_array > 1):
+        if np.any(pct_total_util_array < float(0)) or np.any(pct_total_util_array > float(1)):
+
+            print("Game Conditions:")
+            print(f"Game Mode: {self.game_mode_type}")
+            print(f"Top K: {self.top_k}")
+            print(f"To Admit: {self.to_admit}")
+            print(f"Log Normal: {self.log_normal}")
+            print("\nCategory Parameters:")
+            for category in self.categories.values():
+                print(f"Category {category.name}: mu={category.mu}, sigma={category.sigma}, size={category.size}, distribution={category.log_normal}")
+            print("\nPlayer Strategies:")
+            for player in self.players:
+                print(f"Player {player.name} (Win Value: {player.win_value}, Blind: {player.blind}, Level: {player.level}):")
+                for category, strategy in player.strategy.items():
+                    print(f"  {category}: {strategy}")
+            # Debug: Check batch_results
+            print("batch_results:", batch_results)
+            print("Any negative values in batch_results:", np.any(batch_results < 0))
+            print("Any NaN values in batch_results:", np.any(np.isnan(batch_results)))
+            print("Any inf values in batch_results:", np.any(np.isinf(batch_results)))
+            # Debug: Check total_utilities
+            print("total_utilities:", total_utilities)
+            print("Any zero or negative values in total_utilities:", np.any(total_utilities <= 0))
+            print("Any NaN values in total_utilities:", np.any(np.isnan(total_utilities)))
+            print("Any inf values in total_utilities:", np.any(np.isinf(total_utilities)))
+
+                # Debug: Check pct_total_util_array
+            print("pct_total_util_array:", pct_total_util_array)
+            print("Any values < 0 in pct_total_util_array:", np.any(pct_total_util_array < 0))
+            print("Any values > 1 in pct_total_util_array:", np.any(pct_total_util_array > 1))
+            print("Any NaN values in pct_total_util_array:", np.any(np.isnan(pct_total_util_array)))
+            print("Any inf values in pct_total_util_array:", np.any(np.isinf(pct_total_util_array)))
             raise ValueError("expected all percentages to be between 0 and 1")
 
         return pct_total_util_array

@@ -3,7 +3,7 @@ import shutil
 import pandas as pd
 from git import Repo
 import cupy as cp
-import datetime
+import time as t
 import main_gpu
 from multiprocessing import Pool, cpu_count
 
@@ -51,6 +51,8 @@ def process_file(file_name):
     # Read and process the file
     df = pd.read_csv(file_path)
 
+    start = t.time()
+
     # Process each row and expand the results into separate columns
     results = df.apply(main_gpu.process_row, axis=1, result_type='expand')
     poly_degree = len(results.iloc[0][0])  # Get the number of polynomial coefficients
@@ -69,11 +71,13 @@ def process_file(file_name):
     os.remove(file_path)
 
     # update tracking in git
-    repo.index.add([dst])
-    repo.index.remove([src])
+    repo.index.add([finished_path])
+    repo.index.remove([file_path])
+
+    end = t.time()
 
 
-    print(f"Processed and moved {file_name} to 'finished'.")
+    print(f"Processed and moved {file_name} to 'finished'. Took {end-start} seconds to finish a file")
 
 if __name__ == "__main__":
     # Detect GPU availability
@@ -97,7 +101,7 @@ if __name__ == "__main__":
         origin.pull()
 
         # Get the list of files in the 'not_started' folder (up to 100 files)
-        files = os.listdir(NOT_STARTED_FOLDER)[:min(10, len(os.listdir(NOT_STARTED_FOLDER)))]
+        files = os.listdir(NOT_STARTED_FOLDER)[:min(100, len(os.listdir(NOT_STARTED_FOLDER)))]
 
         if not files:
             print("No more files to process in 'not_started'. Exiting.")
