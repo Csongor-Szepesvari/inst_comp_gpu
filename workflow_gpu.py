@@ -66,14 +66,12 @@ def process_file(file_name):
     # now remove this file from the started path
     os.remove(file_path)
 
-    # update tracking in git
-    repo.index.add([finished_path])
-    repo.index.remove([file_path])
-
     end = t.time()
-
-
     print(f"Processed and moved {file_name} to 'finished'. Took {end-start} seconds to finish a file")
+    return (file_path, finished_path)
+
+
+    
 
 if __name__ == "__main__":
     
@@ -101,11 +99,8 @@ if __name__ == "__main__":
         # Use multiprocessing Pool to process files concurrently
         num_cores = cpu_count()
         with Pool(num_cores-2) as pool:
-            pool.map(process_file, files)
+            files_batch = pool.map(process_file, files)
 
         # push the changes to github
-        repo.index.commit(f"Moved {len(files)} files in batch.")
-        origin = repo.remote(name="origin")
-        origin.pull()
-        origin.push()
+        update_git(files_batch)
         

@@ -235,7 +235,7 @@ class Player:
 
             self.blind_strategy["high"] = high_admit / high_total
             self.blind_strategy["low"] = low_admit / low_total
-            self.update_strategy(self.blind_strategy, game)
+            self.update_strategy(game)
 
     def best_response(self, game):
         """
