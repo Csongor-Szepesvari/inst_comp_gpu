@@ -9,7 +9,6 @@ The tasks are as follows:
 '''
 
 from objects_gpu import Game, Player, Category
-import cupy as cp
 import numpy as np
 import time as t
 import scipy.stats as stats
@@ -20,7 +19,7 @@ def polynomial_pdf(x, *coeffs):
     poly = np.polyval(coeffs, x)
     return np.maximum(poly, 0)  # Ensure non-negativity
 
-def process_row(row, verbose=False, poly_degree=20, visualize=False):
+def process_row(row, verbose=False, poly_degree=10, visualize=False):
     '''
     Process row takes a row from a dataframe, runs an experiment, simulates the outcome, and returns the results.
     It also fits a probability distribution function using polynomial regression.
@@ -123,20 +122,33 @@ def process_row(row, verbose=False, poly_degree=20, visualize=False):
 
 
 
-    # Convert results to NumPy
-    results_np = cp.asnumpy(results)
 
 
-
-    mean = np.mean(results_np)
-    std = np.std(results_np)
+    mean = np.mean(results)
+    std = np.std(results)
 
     # Estimate empirical density (normalized histogram)
-    hist_values, bin_edges = np.histogram(results_np, bins=100, density=True)
+    hist_values, bin_edges = np.histogram(results, bins=100, density=True)
+    hist_values = hist_values.astype(np.float64)   
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    # Fit a polynomial to the empirical density function
-    poly_coeffs, _ = curve_fit(polynomial_pdf, bin_centers, hist_values, p0=np.ones(poly_degree + 1))
+    try: 
+        # Fit a polynomial to the empirical density function
+        poly_coeffs, _ = curve_fit(polynomial_pdf, bin_centers, hist_values, p0=np.ones(poly_degree + 1))
+    except Exception as e:
+        print()
+        print(results)
+        print()
+        print("Bin centers:", bin_centers)
+        print("Hist values:", hist_values)
+        print("Any NaN in bin_centers:", np.any(np.isnan(bin_centers)))
+        print("Any NaN in hist_values:", np.any(np.isnan(hist_values)))
+        print("Any inf in bin_centers:", np.any(np.isinf(bin_centers)))
+        print("Any inf in hist_values:", np.any(np.isinf(hist_values)))
+        print("Couldn't fit a polynomial to these curves for some reason")
+        print(e)
+        poly_coeffs = np.zeros(poly_degree + 1)
+        print()
 
     end = t.time()
     print(f"Simulating our games took {end-start} seconds.")

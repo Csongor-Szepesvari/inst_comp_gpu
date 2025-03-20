@@ -1,5 +1,6 @@
-import cupy as cp
+import cupy as np
 from scipy.stats import norm
+import numpy as np
 
 def calculate_replicates_for_top_k(
     params,          # List of (dist_type, mu, sigma, sample_size) tuples
@@ -40,16 +41,16 @@ def calculate_replicates_for_top_k(
 
     for _ in range(max_iters):
         # Generate the combined sample based on specified sample sizes and distribution types
-        combined_data = cp.concatenate([
-            cp.random.normal(mu, sigma, int(n)) if dist_type == 'normal' else
-            cp.random.lognormal(mu, sigma, int(n))
+        combined_data = np.concatenate([
+            np.random.normal(mu, sigma, int(n)) if dist_type == 'normal' else
+            np.random.lognormal(mu, sigma, int(n))
             for dist_type, mu, sigma, n in params
         ])
 
         # Extract top-k values
-        top_k_values = cp.sort(combined_data)[-k:]
-        top_k_mean = cp.mean(top_k_values)
-        top_k_std = cp.std(top_k_values, ddof=1) if len(top_k_values) > 1 else cp.std(top_k_values)
+        top_k_values = np.sort(combined_data)[-k:]
+        top_k_mean = np.mean(top_k_values)
+        top_k_std = np.std(top_k_values, ddof=1) if len(top_k_values) > 1 else np.std(top_k_values)
 
         # Estimate the required number of replicates
         required_replicates = max(1, int(((z * top_k_std) / (error_rate * top_k_mean))**2))
@@ -65,8 +66,8 @@ def calculate_replicates_for_top_k(
     return num_replicates
 
 def transform_mu_sigma_to_log(mu, sigma):
-    sigma_log = cp.log(sigma) / 2
-    mu_log = cp.log(mu) / 2
+    sigma_log = np.log(sigma) / 2
+    mu_log = np.log(mu) / 2
     return mu_log, sigma_log
 
 def generate_samples_top_k(categories, top_k=None):
@@ -80,14 +81,14 @@ def generate_samples_top_k(categories, top_k=None):
     Returns:
         cupy.ndarray: Array of sampled outcomes (sorted if top_k is specified).
     """
-    outcomes = cp.concatenate([
-        cp.random.lognormal(mu, sigma, int(n)) if dist_type == 'log' else
-        cp.random.normal(mu, sigma, int(n))
+    outcomes = np.concatenate([
+        np.random.lognormal(mu, sigma, int(n)) if dist_type == 'log' else
+        np.random.normal(mu, sigma, int(n))
         for dist_type, mu, sigma, n in categories
     ])
 
     if top_k is not None:
-        outcomes = cp.sort(outcomes)[-top_k:]
+        outcomes = np.sort(outcomes)[-top_k:]
     return outcomes
 
 
@@ -100,19 +101,19 @@ class Category:
         self.mu, self.sigma = (
             transform_mu_sigma_to_log(mu, sigma) if log_or_normal == 'log' else (mu, sigma)
         )
-        self.mean = cp.exp((self.mu + self.sigma ** 2) / 2) if log_or_normal == 'log' else self.mu
-        self.std = (cp.exp(2*self.mu)*(cp.exp(self.sigma**2)-1))**(1/2) if log_or_normal == 'log' else self.sigma
+        self.mean = np.exp((self.mu + self.sigma ** 2) / 2) if log_or_normal == 'log' else self.mu
+        self.std = (np.exp(2*self.mu)*(np.exp(self.sigma**2)-1))**(1/2) if log_or_normal == 'log' else self.sigma
 
     def get_samples(self, sizes):
         #print(self.name, sizes)
-        if cp.any(sizes > self.size):
+        if np.any(sizes > self.size):
             raise ValueError("Cannot sample more than available elements.")
         samples = []
         for n in sizes:
             if self.log_normal == 'log':
-                samples.append(cp.random.lognormal(mean=self.mu, sigma=self.sigma, size=int(n)))
+                samples.append(np.random.lognormal(mean=self.mu, sigma=self.sigma, size=int(n)))
             else:
-                samples.append(cp.random.normal(loc=self.mean, scale=self.std, size=int(n)))
+                samples.append(np.random.normal(loc=self.mean, scale=self.std, size=int(n)))
         return samples
 
 
@@ -164,7 +165,7 @@ class Player:
             game (Game): The current game object.
         """
 
-        self.strategy = {category_name: cp.round(self.blind_strategy[group] * game.categories[category_name].size) / game.categories[category_name].size  for category_name, group in zip(["Q1", "Q2", "Q3", "Q4"], ["high", "high", "low", "low"])}
+        self.strategy = {category_name: np.round(self.blind_strategy[group] * game.categories[category_name].size) / game.categories[category_name].size  for category_name, group in zip(["Q1", "Q2", "Q3", "Q4"], ["high", "high", "low", "low"])}
 
     def calculate_win_chance(self, players):
         """
@@ -330,8 +331,8 @@ class Game:
         num_replicates = max(5000, min(calculate_replicates_for_top_k(categories, self.top_k), 50000)) if categories[0][0] == 'log' else max(1000, min(num_replicates, 10000))
         
 
-        outcomes = cp.mean(cp.stack([
-            cp.mean(generate_samples_top_k(categories, top_k=self.top_k))
+        outcomes = np.mean(np.stack([
+            np.mean(generate_samples_top_k(categories, top_k=self.top_k))
             for _ in range(num_replicates)
         ]))
 
@@ -353,12 +354,12 @@ class Game:
         """
         results = {}
         for player in self.players:
-            admitted_values = cp.array(attendees[player.name])
+            admitted_values = np.array(attendees[player.name])
             if self.game_mode_type == "top_k":
-                top_k_values = cp.sort(admitted_values)[-self.top_k:]
-                utility = cp.sum(top_k_values) - abs(len(admitted_values) - self.to_admit)
+                top_k_values = np.sort(admitted_values)[-self.top_k:]
+                utility = np.sum(top_k_values) - abs(len(admitted_values) - self.to_admit)
             else:
-                utility = cp.sum(admitted_values) - abs(len(admitted_values) - self.to_admit)
+                utility = np.sum(admitted_values) - abs(len(admitted_values) - self.to_admit)
 
             results[player.name] = {
                 "utility": utility.get(),
@@ -380,19 +381,22 @@ class Game:
             batch_size (int): Number of games to simulate in parallel.
 
         Returns:
-            cp.ndarray: Array of 'pct_total_util' for each player in each game.
+            np.ndarray: Array of 'pct_total_util' for each player in each game.
         """
         # Initialize an array to store results for each game in the batch
-        batch_results = cp.zeros((batch_size, len(self.players)))
+        batch_results = np.zeros((batch_size, len(self.players)))
+
+        # Initialize a dictionary to store all sampled values for each player
+        all_attendees = {player.name: [[] for _ in range(batch_size)] for player in self.players}
 
         for category in self.categories.values():
             # make candidates have shape (batch_size, category.size)
-            candidates = cp.array([cp.arange(category.size) for _ in range(batch_size)])
+            candidates = np.array([np.arange(category.size) for _ in range(batch_size)])
             
 
             # Vectorized allocation of candidates to players for each game in the batch
             allocations = {
-                player.name: cp.array([cp.random.choice(candidates[0], size=int(cp.round(player.strategy[category.name] * category.size)), replace=False) for _ in range(batch_size)])
+                player.name: np.array([np.random.choice(candidates[0], size=int(np.round(player.strategy[category.name] * category.size)), replace=False) for _ in range(batch_size)])
                 for player in self.players
             }
             
@@ -410,7 +414,7 @@ class Game:
                 player_allocations_expanded = player_allocations[:, None, :]  # Shape: (batch_size, 1, num_allocations)
 
                 # Use broadcasting to compare candidates with player allocations
-                player_mask = cp.any(candidates_expanded == player_allocations_expanded, axis=2)
+                player_mask = np.any(candidates_expanded == player_allocations_expanded, axis=2)
                 #print(player_mask)
                 # Store the mask for the current player
                 masks[player.name] = player_mask
@@ -418,10 +422,10 @@ class Game:
             #print("Player occupancy masks", masks)
 
             # Calculate win probabilities for each player
-            win_probs = cp.array([player.win_value for player in self.players])
+            win_probs = np.array([player.win_value for player in self.players])
             
             # Normalize win probabilities for each candidate
-            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
+            win_probs_normalized = win_probs / np.sum(win_probs, axis=0)
             #print(win_probs_normalized)
             # Randomly select winners based on win probabilities for each possible candidate
 
@@ -434,11 +438,11 @@ class Game:
                     check the mask of each player.
                     if both masks are true, then we consult the winners array to see who wins, else we set the winners array to be either the sole player competing or -1
             '''
-            winners = cp.random.choice(len(self.players), size=(batch_size, category.size), p=win_probs_normalized)
+            winners = np.random.choice(len(self.players), size=(batch_size, category.size), p=win_probs_normalized)
             
             # Apply the logic described above in a vectorized way
             # Initialize a new winners array with -1, indicating no winner by default
-            new_winners = cp.full((batch_size, category.size), -1, dtype=int)
+            new_winners = np.full((batch_size, category.size), -1, dtype=int)
 
             # Iterate over each player to update the new_winners array
             for i, player in enumerate(self.players):
@@ -446,33 +450,48 @@ class Game:
                 player_mask = masks[player.name]
                 
                 # Determine where the current player is the sole competitor
-                sole_competitor = player_mask & (cp.sum(cp.stack([masks[p.name] for p in self.players]), axis=0) == 1)
+                sole_competitor = player_mask & (np.sum(np.stack([masks[p.name] for p in self.players]), axis=0) == 1)
                 #print("Player", i, "is the sole competitor in", sole_competitor)
                 # Update new_winners where the current player is the sole competitor
-                new_winners = cp.where(sole_competitor, i, new_winners)
+                new_winners = np.where(sole_competitor, i, new_winners)
 
             # Determine where there are multiple competitors
-            multiple_competitors = cp.sum(cp.stack([masks[p.name] for p in self.players]), axis=0) > 1
+            multiple_competitors = np.sum(np.stack([masks[p.name] for p in self.players]), axis=0) > 1
 
             # Use the original winners array to resolve ties where there are multiple competitors
-            new_winners = cp.where(multiple_competitors, winners, new_winners)
+            new_winners = np.where(multiple_competitors, winners, new_winners)
             #print(new_winners)
 
 
             # Collect samples for winners
             for i, player in enumerate(self.players):
                 winner_mask = (new_winners == i)
-                #print(i, winner_mask)
-                #print("Category", category.name, "player", i, "number of candidates successfully attained over different runs", cp.sum(winner_mask, axis=1))
-                attendees = category.get_samples(cp.sum(winner_mask, axis=1))
-                #print(attendees)
-                batch_results[:, i] += cp.array([cp.sum(att) for att in attendees])
+                attendees = category.get_samples(np.sum(winner_mask, axis=1))
+                
+                # Append sampled values to the player's list for each game
+                for game_idx in range(batch_size):
+                    all_attendees[player.name][game_idx].extend(attendees[game_idx])
 
+        # After processing all categories, handle top-k if needed
+        if self.game_mode_type == "top_k":
+            for i, player in enumerate(self.players):
+                for game_idx in range(batch_size):
+                    # Select the top-k values for this game
+                    top_k_values = np.sort(all_attendees[player.name][game_idx])[-self.top_k:]
+                    batch_results[game_idx, i] = np.sum(top_k_values)
+        else:
+            # For non-top-k mode, sum all sampled values for each game
+            for i, player in enumerate(self.players):
+                for game_idx in range(batch_size):
+                    batch_results[game_idx, i] = np.sum(all_attendees[player.name][game_idx])
 
-        #print(batch_results)
         # Calculate utilities and extract 'pct_total_util' for each player in each game
-        total_utilities = cp.sum(batch_results, axis=1, keepdims=True)
+        total_utilities = np.sum(batch_results, axis=1, keepdims=True)
         pct_total_util_array = batch_results / total_utilities
+
+        # Add validation check
+        if np.any(pct_total_util_array < 0) or np.any(pct_total_util_array > 1):
+            raise ValueError("expected all percentages to be between 0 and 1")
 
         return pct_total_util_array
 
@@ -486,40 +505,40 @@ class Game:
         Simulate the game based on player strategies and resolve outcomes.
 
         Returns:
-            cp.ndarray: Array of 'pct_total_util' for each player.
+            np.ndarray: Array of 'pct_total_util' for each player.
         """
         attendees = {player.name: [] for player in self.players}
         
         for category in self.categories.values():
-            candidates = cp.arange(category.size)
+            candidates = np.arange(category.size)
             
             # Vectorized allocation of candidates to players
             allocations = {
-                player.name: cp.random.choice(candidates, size=int(cp.round(player.strategy[category.name] * category.size)), replace=False)
+                player.name: np.random.choice(candidates, size=int(np.round(player.strategy[category.name] * category.size)), replace=False)
                 for player in self.players
             }
             print(allocations)
             # Create a boolean mask for each player indicating which candidates they have
-            masks = {player.name: cp.isin(candidates, allocations[player.name]) for player in self.players}
+            masks = {player.name: np.isin(candidates, allocations[player.name]) for player in self.players}
             
             
             # Calculate win probabilities for each player
-            win_probs = cp.array([player.win_value for player in self.players])
+            win_probs = np.array([player.win_value for player in self.players])
             
             # Normalize win probabilities for each candidate
-            win_probs_normalized = win_probs / cp.sum(win_probs, axis=0)
+            win_probs_normalized = win_probs / np.sum(win_probs, axis=0)
             
             # Randomly select winners based on win probabilities for each possible candidate
-            winners = cp.random.choice(len(self.players), size=category.size, p=win_probs_normalized)
+            winners = np.random.choice(len(self.players), size=category.size, p=win_probs_normalized)
             print(winners)
             # If the boolean mask overlaps with winners for a player, add that sample to the player's attendees
             for i, player in enumerate(self.players):
                 winner_mask = (winners == i)
-                attendees[player.name].extend(category.get_samples(cp.sum(winner_mask)))
+                attendees[player.name].extend(category.get_samples(np.sum(winner_mask)))
 
         # Calculate utilities and extract 'pct_total_util' for each player
         utilities = self.calculate_utilities(attendees)
-        pct_total_util_array = cp.array([utilities[player.name]['pct_total_util'] for player in self.players])
+        pct_total_util_array = np.array([utilities[player.name]['pct_total_util'] for player in self.players])
 
         return pct_total_util_array
 '''
