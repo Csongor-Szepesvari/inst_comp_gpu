@@ -226,7 +226,7 @@ class Player:
                             max_cat = category.name
                 new_strategy[max_cat] += 1
 
-            self.strategy = {key: value / feasible_strategy_numbers[key] for key, value in new_strategy.items()}
+            self.strategy = {key: value / feasible_strategy_numbers[key] if feasible_strategy_numbers[key]!=0 else 0 for key, value in new_strategy.items()}
         else:
             high_total = feasible_strategy_numbers["Q1"] + feasible_strategy_numbers["Q2"]
             low_total = feasible_strategy_numbers["Q3"] + feasible_strategy_numbers["Q4"]
@@ -405,7 +405,7 @@ class Game:
 
             # Vectorized allocation of candidates to players for each game in the batch
             allocations = {
-                player.name: np.array([np.random.choice(candidates[0], size=max(category.size, int(np.round(player.strategy[category.name] * category.size))), replace=False) for _ in range(batch_size)])
+                player.name: np.array([np.random.choice(candidates[_], size=min(len(candidates[_]), np.round(player.strategy[category.name] * category.size).astype(int)), replace=False) for _ in range(batch_size)])
                 for player in self.players
             }
             
